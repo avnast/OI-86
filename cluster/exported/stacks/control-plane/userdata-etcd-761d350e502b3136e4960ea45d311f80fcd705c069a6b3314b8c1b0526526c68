@@ -1,0 +1,507 @@
+#cloud-config
+coreos:
+  update:
+    reboot-strategy: "off"
+  units:
+    - name: cfn-etcd-environment.service
+      enable: true
+      command: start
+      runtime: true
+      content: |
+        [Unit]
+        Description=Configures EBS volume and R53 record set for this node and derives env vars for etcd bootstrap
+        After=network-online.target
+        Before=format-etcd2-volume.service
+
+        [Service]
+        EnvironmentFile=/var/run/coreos/etcd-node.env
+        Restart=on-failure
+        RemainAfterExit=true
+        ExecStartPre=/opt/bin/cfn-etcd-environment
+        ExecStartPre=/usr/bin/mv -f /var/run/coreos/etcd-environment /etc/etcd-environment
+        ExecStart=/bin/true
+        TimeoutStartSec=120
+
+        [Install]
+        RequiredBy=format-etcd2-volume.service
+
+
+    - name: etcdadm-reconfigure.service
+      enable: true
+      content: |
+        [Unit]
+        Description=etcdadm reconfigure runner
+        BindsTo=etcd-member.service
+        Before=etcd-member.service
+        Wants=cfn-etcd-environment.service
+        After=cfn-etcd-environment.service
+        After=network.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        RestartSec=5
+        EnvironmentFile=-/etc/etcd-environment
+        EnvironmentFile=-/var/run/coreos/etcdadm-environment
+        ExecStartPre=/usr/bin/systemctl is-active cfn-etcd-environment.service
+        ExecStartPre=/usr/bin/mkdir -p /var/run/coreos/etcdadm/snapshots
+        ExecStart=/opt/bin/etcdadm reconfigure
+        TimeoutStartSec=120
+
+        [Install]
+        WantedBy=cfn-etcd-environment.service
+
+    - name: etcdadm-update-status.service
+      enable: true
+      content: |
+        [Unit]
+        Description=etcdadm update status
+        BindsTo=etcd-member.service
+        After=etcd-member.service
+        After=network.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        RestartSec=5
+        EnvironmentFile=-/etc/etcd-environment
+        EnvironmentFile=-/var/run/coreos/etcdadm-environment
+        ExecStart=/opt/bin/etcdadm member_status_set_started
+        TimeoutStartSec=120
+
+    - name: etcdadm-check.service
+      enable: true
+      content: |
+        [Unit]
+        Description=etcd health check
+
+        [Service]
+        Type=oneshot
+        EnvironmentFile=-/etc/etcd-environment
+        EnvironmentFile=-/var/run/coreos/etcdadm-environment
+        ExecStartPre=/usr/bin/systemctl is-active etcd-member.service
+        ExecStart=/opt/bin/etcdadm check
+        TimeoutStartSec=120
+
+    
+
+    - name: etcdadm-save.service
+      enable: true
+      content: |
+        [Unit]
+        Description=etcd snapshot
+
+        [Service]
+        Type=oneshot
+        EnvironmentFile=-/etc/etcd-environment
+        EnvironmentFile=-/var/run/coreos/etcdadm-environment
+        ExecStartPre=/usr/bin/systemctl is-active etcd-member.service
+        ExecStart=/opt/bin/etcdadm save
+        TimeoutStartSec=300
+
+    
+
+    - name: etcd-member.service
+      drop-ins:
+        - name: 20-aws-cluster.conf
+          content: |
+            [Unit]
+            Wants=cfn-etcd-environment.service
+            After=cfn-etcd-environment.service
+            Wants=decrypt-assets.service
+            After=decrypt-assets.service
+            
+            BindsTo=etcdadm-reconfigure.service etcdadm-update-status.service
+            After=etcdadm-reconfigure.service
+            Before=etcdadm-update-status.service
+            [Service]
+            EnvironmentFile=-/etc/etcd-environment
+            EnvironmentFile=-/var/run/coreos/etcdadm/etcd-member.env
+
+            PermissionsStartOnly=true
+            ExecStartPre=/usr/bin/systemctl is-active cfn-etcd-environment.service
+            ExecStartPre=/usr/bin/systemctl is-active decrypt-assets.service
+            ExecStartPre=/usr/bin/chown -R etcd:etcd /var/lib/etcd2
+        
+        - name: 40-version.conf
+          content: |
+            [Service]
+            Environment="ETCD_IMAGE_TAG=v3.2.10"
+        
+      enable: true
+      command: start
+
+    - name: var-lib-etcd2.mount
+      enable: true
+      content: |
+        [Unit]
+        Before=etcd-member.service
+
+        [Mount]
+        What=/dev/xvdf
+        Where=/var/lib/etcd2
+        Type=ext4
+
+        [Install]
+        RequiredBy=etcd-member.service
+
+    - name: format-etcd2-volume.service
+      enable: true
+      content: |
+        [Unit]
+        Description=Formats etcd2 ebs volume
+        After=dev-xvdf.device
+        Requires=dev-xvdf.device
+        Before=var-lib-etcd2.mount
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/opt/bin/ext4-format-volume-once /dev/xvdf
+
+        [Install]
+        RequiredBy=var-lib-etcd2.mount
+
+
+    - name: decrypt-assets.service
+      enable: true
+      content: |
+        [Unit]
+        Description=decrypt etcd2 tls assets using amazon kms
+        Before=etcd-member.service
+
+        [Service]
+        Restart=on-failure
+        RemainAfterExit=yes
+        ExecStartPre=/usr/bin/rkt run \
+          --uuid-file-save=/var/run/coreos/decrypt-assets.uuid \
+          --volume=ssl,kind=host,source=/etc/ssl/certs,readOnly=false \
+          --mount=volume=ssl,target=/etc/ssl/certs \
+          --volume=dns,kind=host,source=/etc/resolv.conf,readOnly=true \
+          --mount volume=dns,target=/etc/resolv.conf \
+          --net=host \
+          --trust-keys-from-https \
+        quay.io/coreos/awscli:master --exec=/bin/bash -- \
+            -ec \
+            'echo decrypting tls assets; \
+             shopt -s nullglob; \
+             for encKey in /etc/ssl/certs/*.pem.enc; do \
+             echo decrypting $encKey; \
+             /usr/bin/aws \
+               --region us-west-2 kms decrypt \
+               --ciphertext-blob fileb://$encKey \
+               --output text \
+               --query Plaintext \
+             | base64 -d > $${encKey%.enc}; \
+             done; \
+             echo done.'
+        ExecStart=-/usr/bin/rkt rm --uuid-file=/var/run/coreos/decrypt-assets.uuid
+
+        [Install]
+        RequiredBy=etcd-member.service
+
+
+
+    - name: cfn-signal.service
+      command: start
+      content: |
+        [Unit]
+        Wants=etcd-member.service
+        After=etcd-member.service
+
+        [Service]
+        Type=simple
+        Restart=on-failure
+        RestartSec=10
+
+        EnvironmentFile=/var/run/coreos/etcd-node.env
+        ExecStartPre=/usr/bin/systemctl is-active etcd-member.service
+        ExecStartPre=/usr/bin/rkt fetch quay.io/coreos/awscli:master
+        ExecStart=-/opt/bin/cfn-signal
+
+
+
+
+write_files:
+  - path: /etc/ssh/sshd_config
+    permissions: 0600
+    owner: root:root
+    content: |
+      UsePrivilegeSeparation sandbox
+      Subsystem sftp internal-sftp
+      ClientAliveInterval 180
+      UseDNS no
+      UsePAM yes
+      PrintLastLog no # handled by PAM
+      PrintMotd no # handled by PAM
+      PasswordAuthentication no
+      ChallengeResponseAuthentication no
+
+  - path: /opt/bin/cfn-init-etcd-server
+    owner: root:root
+    permissions: 0700
+    content: |
+      #!/bin/bash -vxe
+
+      cfn-init -v -c "etcd-server" --region us-west-2 --resource Etcd$KUBE_AWS_ETCD_INDEX --stack $KUBE_AWS_STACK_NAME
+
+  - path: /opt/bin/attach-etcd-volume
+    owner: root:root
+    permissions: 0700
+    content: |
+      #!/bin/bash -vxe
+
+      # To omit the `--region us-west-2` flag for every aws-cli invocation
+      export AWS_DEFAULT_REGION=us-west-2
+
+      instance_id=$(curl http://169.254.169.254/latest/meta-data/instance-id)
+      az=$(curl http://169.254.169.254/latest/meta-data/placement/availability-zone)
+
+      # values shared between cloud-config-etcd and stack-template.json
+      stack_name=$KUBE_AWS_STACK_NAME
+      name_tag_key="kube-aws:etcd:name"
+      advertised_hostname_tag_key="kube-aws:etcd:advertised-hostname"
+      eip_allocation_id_tag_key="kube-aws:etcd:eip-allocation-id"
+      network_interface_id_tag_key="kube-aws:etcd:network-interface-id"
+
+      etcd_index=$KUBE_AWS_ETCD_INDEX
+
+      state_prefix=/var/run/coreos/etcd-volume
+      output_prefix=/var/run/coreos/
+      common_volume_filter="Name=tag:aws:cloudformation:stack-name,Values=$stack_name Name=tag:kube-aws:etcd:index,Values=$etcd_index"
+
+      export $(cat /var/run/coreos/etcd-environment | grep -v ^# | xargs)
+
+      export | grep ETCD
+
+      # TODO: Locate the corresponding EBS volume via a tag on the ASG managing this EC2 instance
+      # See https://github.com/coreos/kube-aws/pull/332#issuecomment-281531769
+
+      # Skip the `while` block below when the EBS volume is already attached to this EC2 instance
+      aws ec2 describe-volumes \
+        --filters $common_volume_filter Name=attachment.instance-id,Values=$instance_id \
+        | jq -r '([] + .Volumes)[0]' \
+        > ${state_prefix}.json
+
+      attached_vol_id=$(
+        cat ${state_prefix}.json \
+          | jq -r '"" + .VolumeId'
+      )
+
+      # Decide which volume to attach hence hostname to assume
+      while [ "$attached_vol_id" = "" ]; do
+        sleep 3
+
+        aws ec2 describe-volumes \
+          --filters $common_volume_filter Name=status,Values=available Name=availability-zone,Values=$az \
+          > ${state_prefix}-candidates.json
+
+        cat ${state_prefix}-candidates.json \
+          | jq -r '([] + .Volumes)[0]' \
+          > ${state_prefix}.json
+
+        candidate_vol_id=$(
+          cat ${state_prefix}.json \
+            | jq -r '"" + .VolumeId'
+        )
+
+        if [ "$candidate_vol_id" = "" ]; then
+          echo "[bug] no etcd volume found" 1>&2
+          exit 1
+        fi
+
+        # See http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/device_naming.html for device naming
+        if aws ec2 attach-volume --volume-id $candidate_vol_id --instance-id $instance_id --device "/dev/xvdf"; then
+          attached_vol_id=$candidate_vol_id
+        fi
+      done
+
+      # Wait until the volume attachment completes
+      until [ "$volume_status" = ok ]; do
+        sleep 3
+        describe_volume_status_result=$(aws ec2 describe-volume-status --volume-id $attached_vol_id)
+        volume_status=$(echo "$describe_volume_status_result" | jq -r "([] + .VolumeStatuses)[0].VolumeStatus.Status")
+      done
+
+      cat ${state_prefix}.json \
+        | jq -r "([] + .Tags)[] | select(.Key == \"$name_tag_key\").Value" \
+        > ${output_prefix}name
+
+      cat ${state_prefix}.json \
+        | jq -r "([] + .Tags)[] | select(.Key == \"$advertised_hostname_tag_key\").Value" \
+        > ${output_prefix}advertised-hostname
+
+      cat ${state_prefix}.json \
+        | jq -r "([] + .Tags)[] | select(.Key == \"$eip_allocation_id_tag_key\").Value" \
+        > ${output_prefix}eip-allocation-id
+
+      cat ${state_prefix}.json \
+        | jq -r "([] + .Tags)[] | select(.Key == \"$network_interface_id_tag_key\").Value" \
+        > ${output_prefix}network-interface-id
+
+  
+
+  - path: /opt/bin/assume-advertised-hostname-with-eip
+    owner: root:root
+    permissions: 0700
+    content: |
+      #!/bin/bash -vxe
+
+      # To omit the `--region us-west-2` flag for every aws-cli invocation
+      export AWS_DEFAULT_REGION=us-west-2
+
+      instance_id=$(curl http://169.254.169.254/latest/meta-data/instance-id)
+      eip_alloc_id=$1
+
+      aws ec2 associate-address --instance-id $instance_id --allocation-id $eip_alloc_id
+
+      curl http://169.254.169.254/latest/meta-data/public-hostname
+
+      curl http://169.254.169.254/latest/meta-data/local-ipv4 > /var/run/coreos/listen-private-ip
+
+  - path: /opt/bin/append-etcd-server-env
+    owner: root:root
+    permissions: 0700
+    content: |
+      #!/bin/bash -vxe
+
+      private_ip=$(cat /var/run/coreos/listen-private-ip)
+      name=$(cat /var/run/coreos/name)
+      advertised_hostname=$(cat /var/run/coreos/advertised-hostname)
+
+      echo "KUBE_AWS_ASSUMED_HOSTNAME=$advertised_hostname
+      ETCD_NAME=$name
+      ETCD_PEER_TRUSTED_CA_FILE=/etc/ssl/certs/etcd-trusted-ca.pem
+      ETCD_PEER_CERT_FILE=/etc/ssl/certs/etcd.pem
+      ETCD_PEER_KEY_FILE=/etc/ssl/certs/etcd-key.pem
+
+      ETCD_CLIENT_CERT_AUTH=true
+      ETCD_TRUSTED_CA_FILE=/etc/ssl/certs/etcd-trusted-ca.pem
+      ETCD_CERT_FILE=/etc/ssl/certs/etcd.pem
+      ETCD_KEY_FILE=/etc/ssl/certs/etcd-key.pem
+
+      ETCD_INITIAL_CLUSTER_STATE=new
+      ETCD_DATA_DIR=/var/lib/etcd2
+      ETCD_LISTEN_CLIENT_URLS=https://$private_ip:2379
+      ETCD_ADVERTISE_CLIENT_URLS=https://$advertised_hostname:2379
+      ETCD_LISTEN_PEER_URLS=https://$private_ip:2380
+      ETCD_INITIAL_ADVERTISE_PEER_URLS=https://$advertised_hostname:2380" >> /var/run/coreos/etcd-environment
+
+  - path: /opt/bin/cfn-etcd-environment
+    owner: root:root
+    permissions: 0700
+    content: |
+      #!/bin/bash -e
+
+      run() {
+        rkt run \
+           --volume=dns,kind=host,source=/etc/resolv.conf,readOnly=true \
+           --mount volume=dns,target=/etc/resolv.conf \
+           --volume=awsenv,kind=host,source=/var/run/coreos,readOnly=false \
+           --mount volume=awsenv,target=/var/run/coreos \
+           --volume=optbin,kind=host,source=/opt/bin,readOnly=false \
+           --mount volume=optbin,target=/opt/bin \
+           --uuid-file-save=/var/run/coreos/$1.uuid \
+           --set-env=KUBE_AWS_STACK_NAME=$KUBE_AWS_STACK_NAME \
+           --set-env=KUBE_AWS_ETCD_INDEX=$KUBE_AWS_ETCD_INDEX \
+           --net=host \
+           --trust-keys-from-https \
+           quay.io/coreos/awscli:master --exec=/opt/bin/$1 -- $2
+
+           rkt rm --uuid-file=/var/run/coreos/$1.uuid || :
+        }
+
+      run cfn-init-etcd-server
+      run attach-etcd-volume
+
+      eip_allocation_id=$(cat /var/run/coreos/eip-allocation-id)
+      network_interface_id=$(cat /var/run/coreos/network-interface-id)
+      if [ "$eip_allocation_id" != "" ]; then
+        run assume-advertised-hostname-with-eip $eip_allocation_id
+      elif [ "$network_interface_id" != "" ]; then
+        run assume-advertised-hostname-with-eni $network_interface_id
+        /opt/bin/reconfigure-ip-routing
+      else
+        echo '[bug] neither eip_allocation_id nor network_interface_id for this node found'
+      fi
+
+      run append-etcd-server-env
+
+      /usr/bin/sed -i "s/^ETCDCTL_ENDPOINT.*$/ETCDCTL_ENDPOINT=https:\/\/$(cat /var/run/coreos/advertised-hostname):2379/" /etc/environment
+
+  - path: /opt/bin/etcdadm
+    permissions: 0755
+    encoding: gzip+base64
+    content: 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
+
+  - path: /etc/environment
+    permissions: 0644
+    content: |
+      COREOS_PUBLIC_IPV4=$public_ipv4
+      COREOS_PRIVATE_IPV4=$private_ipv4
+      ETCDCTL_CA_FILE=/etc/ssl/certs/etcd-trusted-ca.pem
+      ETCDCTL_CERT_FILE=/etc/ssl/certs/etcd-client.pem
+      ETCDCTL_KEY_FILE=/etc/ssl/certs/etcd-client-key.pem
+      ETCDCTL_ENDPOINT=
+
+  - path: /opt/bin/ext4-format-volume-once
+    permissions: 0700
+    owner: root:root
+    content: |
+      #!/bin/bash -e
+      if [[ "$(wipefs -n -p $1 | grep ext4)" == "" ]];then
+        mkfs.ext4 $1
+      else
+        echo "volume $1 is already formatted"
+      fi
+
+
+  - path: /opt/bin/cfn-signal
+    owner: root:root
+    permissions: 0700
+    content: |
+      #!/bin/bash -e
+
+      rkt run \
+        --volume=dns,kind=host,source=/etc/resolv.conf,readOnly=true \
+        --mount volume=dns,target=/etc/resolv.conf \
+        --volume=awsenv,kind=host,source=/var/run/coreos,readOnly=false \
+        --mount volume=awsenv,target=/var/run/coreos \
+        --uuid-file-save=/var/run/coreos/cfn-signal.uuid \
+        --set-env=KUBE_AWS_STACK_NAME=$KUBE_AWS_STACK_NAME \
+        --set-env=KUBE_AWS_ETCD_INDEX=$KUBE_AWS_ETCD_INDEX \
+        --net=host \
+        --trust-keys-from-https \
+        quay.io/coreos/awscli:master --exec=/bin/bash -- \
+          -vxec \
+          '
+           cfn-signal -e 0 --region us-west-2 --resource Etcd$KUBE_AWS_ETCD_INDEX --stack $KUBE_AWS_STACK_NAME
+          '
+
+      rkt rm --uuid-file=/var/run/coreos/cfn-signal.uuid || :
+
+
+
+
+  - path: /etc/ssl/certs/etcd-trusted-ca.pem
+    encoding: gzip+base64
+    content: H4sIAAAAAAAA/2SUy66qSBSG5zxFz01HEOQyOIOCqoJCrlqAMAPcgoByUwt5+s7eJ92ddNfwSyX/Sr5/rT+/n45M4v1hoCMlmBiAoh/KuYQYMjQMcDEqwIgOKqIDCDy9ase6vZka43UQzhhA0LlHxCBLYRyGB8Tq6ZLYHeckWCxXFLpAMoEQIbC4Vi7Gt+wkNCkFX5jxiw/Bx6Xp4tJo765djhn/+c3Chfsbuka0IAoCvfJiHfTUMJ9Ceo+e6fmyukfAYPWTDBG7/CQ7iVe7hOgcaf47LsIA+AYIVfD9wagOBggR0AQPOLwvJ9HX7brvCtYJhR0IFlc6aUPDvrjfqrLFgba9ZINfOuMtFEyDHU1tL+/TryUPt08hnILVnNi5uh3aTW122cvacAo6Dcimnf9JPKjGb8lBAd/wUIL1HJR4ltPrjN/TQaSr71i6MARyZlb39rjr6EYVAVfocXYeO3yQkhGfbeE5NfAUaGebp88DExWrCLBwKdiYKLUV2yL1Z88Y/IuTpg9lm1XcIuJHQ125KF8NO5l9fI2FU71F9td823Ry/7rZ2geufbrfYjs+DguQzp/U5xnuLKdTau6gDhvtDqF3zwNG95bs3QPi56wib5x9evzpC/WpQAybvTRda5qHmyppx7eltM+WEciBEOj9x2WEAv9boRWqOriqSAeuAcbwd3GOPAWhtdVBxABD+nb91xz3T9N+1CGgSvjqB16vgks0GcaKLsXU4tPS3GWFHCSyKdN2hUbSnM76GIk6B1MCkIres1TJF5YNd82asmKeibfWK8lKbdKWNHscb/W13/kq2Wazzb+wJ7+Vy/SQB64TXHcM9uUudqFVvfR3mEXwRWTzhnm6eDZQtrVRvkcp50H4XFDn+K4Bx66oeaJEc8jdt7uz9ABDXM9vsRAETQAkpxF0xkDc50epUMVVO+a3yHScjgXrvHiNNuUrjctPmKcapypDn/Tu8HgBF/HRfqVDd576NZXIg8bKKt9t86TOyLOsuD2N01HobRScklZ+7JrZzzgRqSCMP16ubB6havL4qnrJLpjwXJQ4sqf8MPT76tcv7mf7kQf/fxH+CgAA//9gbVeeLgQAAA==
+
+  - path: /etc/ssl/certs/etcd-key.pem.enc
+    encoding: gzip+base64
+    content: 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
+
+  - path: /etc/ssl/certs/etcd.pem
+    encoding: gzip+base64
+    content: H4sIAAAAAAAA/2SUO7OCvBqFe37F6Z0z3EShTEjEgIEdLiJ0AlvCRREFo/z6M+7TfDPfW66nWMW75vnv9yB2iP8fG4cx2REbxPgvlSghiCy2Deq5BoJAUBMCWblL3rqzXScCscz1hpzwV+kDhg+QAeHGOKTAdICaYMnmlJz1Y5NHKq90+sYIBLD2jxDQGGqTml2TKdOw2PPSp3EtaIs1GmM1iKmR8tKXaNz9I2TvtAU3GmKBRIaOjHlY8EeVuv0h3enlgiMKwV8zeFP3WyzlkdpXjt9RQiBpgQ/rbuRd41hCgYDhHQCBDZgJvtyuPRswDKa4+cgcqY4ZzFLily99zsJejKskfsA1D365v/Q6NyqvWH22lP/qK0PbKKSqgX9VCtcoN/fddkwicwwsiTNo28MKvgzjuXVpeBGavRW/rd9Nq/iVul31jn6r5w5+MmdbhOllvGzQ2VOb2TYb+fORYqS9grE6rFtksJOvsGqMkrq5V/nB2W/6lJyfJ+4pj/Ew9N1xXwS90T3s02XWsivCM5dOj1A79s+LPf2+D8XHBIrYo6XFJmwsq/ChGFaRaXFHez+Q74DXXfWFDjFxr6ammNyX+nYM+7oAbL1slGX0F+XS9kp2oQ6XA8q8RbXKwtWWpR2DiPrRpu6mdqF5vvjnsOQfid8iOAxzcWYEAQbgoCYiWf6/hT0zIbiYGAJqwzMQ+PvaUOkhEMKuM+KJDEqQJfsvOoA/GEI7EWRNuNcYavlR9fzkK4eYzJlmTeX+qOSRwYt0tyk04zu8WfoCChTHjkYnIoWOGIa2SABYEwgYgpN7twuzXAfdOh1Mku3wLd/z992ous1JI7L0BuRcpI/y6hxUAoZUPU/bsbF0clNvXSGATX4PfvDKfqdquPH1RhufThd/Emvq4VKWR6l3yHRkJ2NY5c3rR9/MImi4rAFUWfezDLMH7+xY3jXILXQdJuz2efZ5zC9dLj8xy2TpXcCgvZa6WlYUaTZYe9VBbB/4FgWxa4cMPn3g3lZtg+5yl9bCG2V+XCNAbylFrWJJSkKcEzaPlXGtnDB797xAntvJaqtb0QxlqlNjhnHT/5xEfG/n2Mw7efvW7Y1mGfO0SNl59Xr0oYDoJ/xkqTW88LzaTYOTjJ9oo+gnGR1c7+c+qid5eDxot+wL6U8l2Ef/1sv/AgAA//9XpU4lewQAAA==
+
+  - path: /etc/ssl/certs/etcd-client.pem
+    encoding: gzip+base64
+    content: H4sIAAAAAAAA/2SUubKzOBCFc55icmoKAwbboSTEamGLTRcyG8zuDQzCPP3U/aOpmQ5PB193narv79+B2HL8vxAOIsd0EIjwn1QgjoMkAyFwCyvAHQgqxzHdr3VQvtvlOnKDpq73zJx6zn1A8RFSwN0IBwTsLSDHWEA1cS5q0mShXBcqWbABTrDyEwhIBJWPnN7jT6pgbte5T6KKkxYrJMLyKSIaq3NfIFH3r5AurAUTCTA3eGoklHqY10PB3P7ITDVfcUZg/ocMFkJ/wUIWyn1h+d2R+eOFJVPx+07o/Pd0CCkwqgqfwe+ePlFVYQhOJheuz42aMTnyvO1Ig80xIcXe7hFMkRxrUrw8QJcXCRG3hnNLbwSfX26cijqP0PACsd4Lh6/saW95J5pr65sq8kpvZKPe8fvyTcqrXG9K8XN9k7zr6y6dBvaUMP65da3YNdbHnoWhD5bok1N5vLjxyMX3dHDLe6IcnvYW7bFhKskw17ePfJu6QNfkpFDCroSz+HjX6SHeCUGzho0IOhFZ5c1dPnw3BKC58gQUPzqZvLalXmrRHWxK7bjM82AVWTVF6shgfQ9yIkhtfbUh2lfZQ2cqTvaREz/jxrcqcbvZW2KKVLZhi/ladlrsPWMbvndlmzFNehblKVKE4luHTj4a3X6td5W9jfmIAMcAXMiDoJgbVWokweYMqC1BQA1QsYpA8ltl4VJKBAKeFkKjBWhsQk4QARsLhW8rdK6qQTFEPAZg60BAYXU2tbu8vH9o1G62+tu9lP5GOB/m05j5RWCwYekVVcwOmI4RHCcQLBdLWwfp2tGNLWVYD1a5/Hw9fwFfV65Ttgu/H2EN9jxlmp0ExX2p2sLkfld0F4fJwwb1TXxPdnCOCulMhqx+SYc1b6kS34Leq56r7mmCizzfFBsVj9bUfFkuJYHhO6dmIvcf/UzO79Q694qZoLqJ1lOoHkyovHaZbz2umqt+QkGFEvxwu3xELzu6eBm/2C8D7S9omEnp3FBy6ldjuwb6EU35/MCOs8fpmiXG/VEdOvIQ/Juny8cHO8zW7qR0aBW3RTP0ZYnlmZrlm3mqtmCtq1/3MD3d0+VxhW1/JuLbTbthEYU/VsC+8X9T/BMAAP//ZYB5aUYEAAA=
+
+  - path: /etc/ssl/certs/etcd-client-key.pem.enc
+    encoding: gzip+base64
+    content: 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
+
+
+

@@ -1,0 +1,389 @@
+#cloud-config
+coreos:
+  update:
+    reboot-strategy: "off"
+  flannel:
+    interface: $private_ipv4
+    etcd_cafile: /etc/kubernetes/ssl/etcd-trusted-ca.pem
+    etcd_certfile: /etc/kubernetes/ssl/etcd-client.pem
+    etcd_keyfile: /etc/kubernetes/ssl/etcd-client-key.pem
+
+  units:
+    - name: systemd-modules-load.service
+      command: restart
+
+
+
+    - name: cfn-etcd-environment.service
+      enable: true
+      command: start
+      runtime: true
+      content: |
+        [Unit]
+        Description=Fetches etcd static IP addresses list from CF
+        After=network-online.target
+
+        [Service]
+        EnvironmentFile=/etc/environment
+        Restart=on-failure
+        RemainAfterExit=true
+        ExecStartPre=/opt/bin/cfn-etcd-environment
+        ExecStart=/usr/bin/mv -f /var/run/coreos/etcd-environment /etc/etcd-environment
+
+    - name: docker.service
+      drop-ins:
+
+        - name: 10-post-start-check.conf
+          content: |
+            [Service]
+            RestartSec=10
+            ExecStartPost=/usr/bin/docker pull gcr.io/google_containers/pause-amd64:3.0
+
+        - name: 40-flannel.conf
+          content: |
+            [Unit]
+            Wants=flanneld.service
+            [Service]
+            EnvironmentFile=/etc/kubernetes/cni/docker_opts_cni.env
+            ExecStartPre=/usr/bin/systemctl is-active flanneld.service
+
+        - name: 60-logfilelimit.conf
+          content: |
+            [Service]
+            Environment="DOCKER_OPTS=--log-opt max-size=50m --log-opt max-file=3"
+
+    - name: flanneld.service
+      drop-ins:
+        - name: 10-etcd.conf
+          content: |
+            [Unit]
+            Wants=cfn-etcd-environment.service
+            After=cfn-etcd-environment.service
+
+            [Service]
+            EnvironmentFile=-/etc/etcd-environment
+            EnvironmentFile=-/run/flannel/etcd-endpoints.opts
+            ExecStartPre=/usr/bin/systemctl is-active cfn-etcd-environment.service
+            ExecStartPre=/bin/sh -ec "echo FLANNELD_ETCD_ENDPOINTS=${ETCD_ENDPOINTS} >/run/flannel/etcd-endpoints.opts"
+            ExecStartPre=/opt/bin/decrypt-assets
+            Environment="ETCD_SSL_DIR=/etc/kubernetes/ssl"
+            TimeoutStartSec=120
+
+
+    - name: kubelet.service
+      command: start
+      runtime: true
+      content: |
+        [Unit]
+        Wants=flanneld.service cfn-etcd-environment.service
+        After=cfn-etcd-environment.service
+        [Service]
+        EnvironmentFile=/etc/environment
+        EnvironmentFile=-/etc/etcd-environment
+        EnvironmentFile=-/etc/default/kubelet
+        Environment=KUBELET_IMAGE_TAG=v1.8.4_coreos.0
+        Environment=KUBELET_IMAGE_URL=quay.io/coreos/hyperkube
+        Environment="RKT_RUN_ARGS=--volume dns,kind=host,source=/etc/resolv.conf \
+        --set-env=ETCD_CA_CERT_FILE=/etc/kubernetes/ssl/etcd-trusted-ca.pem \
+        --set-env=ETCD_CERT_FILE=/etc/kubernetes/ssl/etcd-client.pem \
+        --set-env=ETCD_KEY_FILE=/etc/kubernetes/ssl/etcd-client-key.pem \
+        --mount volume=dns,target=/etc/resolv.conf \
+        --volume var-lib-cni,kind=host,source=/var/lib/cni \
+        --mount volume=var-lib-cni,target=/var/lib/cni \
+        --volume var-log,kind=host,source=/var/log \
+        --mount volume=var-log,target=/var/log"
+        ExecStartPre=/usr/bin/systemctl is-active flanneld.service
+        ExecStartPre=/usr/bin/systemctl is-active cfn-etcd-environment.service
+        ExecStartPre=/usr/bin/mkdir -p /var/lib/cni
+        ExecStartPre=/usr/bin/mkdir -p /var/log/containers
+        ExecStartPre=/usr/bin/mkdir -p /opt/cni/bin
+        ExecStartPre=/usr/bin/mkdir -p /etc/kubernetes/manifests
+        ExecStartPre=/bin/sh -ec "find /etc/kubernetes/manifests /etc/kubernetes/cni/net.d/  -maxdepth 1 -type f | xargs --no-run-if-empty sed -i 's|#ETCD_ENDPOINTS#|${ETCD_ENDPOINTS}|'"
+        ExecStartPre=/usr/bin/etcdctl \
+                       --ca-file /etc/kubernetes/ssl/etcd-trusted-ca.pem \
+                       --key-file /etc/kubernetes/ssl/etcd-client-key.pem \
+                       --cert-file /etc/kubernetes/ssl/etcd-client.pem \
+                       --endpoints "${ETCD_ENDPOINTS}" \
+                       cluster-health
+        ExecStart=/usr/lib/coreos/kubelet-wrapper \
+        --cni-conf-dir=/etc/kubernetes/cni/net.d \
+        --cni-bin-dir=/opt/cni/bin \
+        --network-plugin=cni \
+        --container-runtime=docker \
+        --rkt-path=/usr/bin/rkt \
+        --rkt-stage1-image=coreos.com/rkt/stage1-coreos \
+        --register-node=true \
+        --allow-privileged=true \
+        --pod-manifest-path=/etc/kubernetes/manifests \
+        --cluster-dns=10.3.0.10 \
+        --cluster-domain=cluster.local \
+        --cloud-provider=aws \
+        --cert-dir=/etc/kubernetes/ssl \
+        --tls-cert-file=/etc/kubernetes/ssl/worker.pem \
+        --tls-private-key-file=/etc/kubernetes/ssl/worker-key.pem \
+        --kubeconfig=/etc/kubernetes/kubeconfig/worker.yaml \
+        --require-kubeconfig \
+        $KUBELET_OPTS
+        Restart=always
+        RestartSec=10
+        [Install]
+        WantedBy=multi-user.target
+
+
+
+
+
+
+
+
+
+
+    - name: cfn-signal.service
+      command: start
+      content: |
+        [Unit]
+        Wants=kubelet.service docker.service
+        After=kubelet.service
+
+        [Service]
+        Type=oneshot
+        EnvironmentFile=/etc/environment
+        ExecStartPre=/usr/bin/bash -c "while sleep 1; do if /usr/bin/curl  --insecure -s -m 20 -f  https://127.0.0.1:10250/healthz > /dev/null ; then break ; fi;  done"
+        
+        ExecStart=/opt/bin/cfn-signal
+
+
+
+
+
+
+
+
+
+
+
+
+
+write_files:
+  - path: /etc/ssh/sshd_config
+    permissions: 0600
+    owner: root:root
+    content: |
+      UsePrivilegeSeparation sandbox
+      Subsystem sftp internal-sftp
+      ClientAliveInterval 180
+      UseDNS no
+      UsePAM yes
+      PrintLastLog no # handled by PAM
+      PrintMotd no # handled by PAM
+      PasswordAuthentication no
+      ChallengeResponseAuthentication no
+  - path: /etc/modules-load.d/ip_vs.conf
+    content: |
+      ip_vs
+      ip_vs_rr
+      ip_vs_wrr
+      ip_vs_sh
+      nf_conntrack_ipv4
+
+
+
+  - path: /opt/bin/cfn-signal
+    owner: root:root
+    permissions: 0700
+    content: |
+      #!/bin/bash -e
+
+      rkt run \
+        --volume=dns,kind=host,source=/etc/resolv.conf,readOnly=true \
+        --mount volume=dns,target=/etc/resolv.conf \
+        --volume=awsenv,kind=host,source=/var/run/coreos,readOnly=false \
+        --mount volume=awsenv,target=/var/run/coreos \
+        --uuid-file-save=/var/run/coreos/cfn-signal.uuid \
+        --net=host \
+        --trust-keys-from-https \
+        quay.io/coreos/awscli:master --exec=/bin/bash -- \
+          -ec \
+          '
+            cfn-signal -e 0 --region us-west-2 --resource Workers --stack '$KUBE_AWS_STACK_NAME'
+          '
+
+      rkt rm --uuid-file=/var/run/coreos/cfn-signal.uuid || :
+
+  - path: /opt/bin/cfn-etcd-environment
+    owner: root:root
+    permissions: 0700
+    content: |
+      #!/bin/bash -e
+
+      rkt run \
+        --volume=dns,kind=host,source=/etc/resolv.conf,readOnly=true \
+        --mount volume=dns,target=/etc/resolv.conf \
+        --volume=awsenv,kind=host,source=/var/run/coreos,readOnly=false \
+        --mount volume=awsenv,target=/var/run/coreos \
+        --uuid-file-save=/var/run/coreos/cfn-etcd-environment.uuid \
+        --net=host \
+        --trust-keys-from-https \
+        quay.io/coreos/awscli:master --exec=/bin/bash -- \
+          -ec \
+          '
+            cfn-init -v -c "etcd-client" --region us-west-2 --resource Workers --stack '$KUBE_AWS_STACK_NAME'
+          '
+
+      rkt rm --uuid-file=/var/run/coreos/cfn-etcd-environment.uuid || :
+
+  - path: /etc/default/kubelet
+    permissions: 0755
+    owner: root:root
+    content: |
+      KUBELET_OPTS=""
+
+  - path: /etc/kubernetes/cni/docker_opts_cni.env
+    content: |
+      DOCKER_OPT_BIP=""
+      DOCKER_OPT_IPMASQ=""
+
+  - path: /opt/bin/host-rkt
+    permissions: 0755
+    owner: root:root
+    content: |
+      #!/bin/sh
+      # This is bind mounted into the kubelet rootfs and all rkt shell-outs go
+      # through this rkt wrapper. It essentially enters the host mount namespace
+      # (which it is already in) only for the purpose of breaking out of the chroot
+      # before calling rkt. It makes things like rkt gc work and avoids bind mounting
+      # in certain rkt filesystem dependancies into the kubelet rootfs. This can
+      # eventually be obviated when the write-api stuff gets upstream and rkt gc is
+      # through the api-server. Related issue:
+      # https://github.com/coreos/rkt/issues/2878
+      exec nsenter -m -u -i -n -p -t 1 -- /usr/bin/rkt "$@"
+
+
+
+  - path: /etc/kubernetes/ssl/etcd-client.pem
+    encoding: gzip+base64
+    content: H4sIAAAAAAAA/2SUubKzOBCFc55icmoKAwbboSTEamGLTRcyG8zuDQzCPP3U/aOpmQ5PB193narv79+B2HL8vxAOIsd0EIjwn1QgjoMkAyFwCyvAHQgqxzHdr3VQvtvlOnKDpq73zJx6zn1A8RFSwN0IBwTsLSDHWEA1cS5q0mShXBcqWbABTrDyEwhIBJWPnN7jT6pgbte5T6KKkxYrJMLyKSIaq3NfIFH3r5AurAUTCTA3eGoklHqY10PB3P7ITDVfcUZg/ocMFkJ/wUIWyn1h+d2R+eOFJVPx+07o/Pd0CCkwqgqfwe+ePlFVYQhOJheuz42aMTnyvO1Ig80xIcXe7hFMkRxrUrw8QJcXCRG3hnNLbwSfX26cijqP0PACsd4Lh6/saW95J5pr65sq8kpvZKPe8fvyTcqrXG9K8XN9k7zr6y6dBvaUMP65da3YNdbHnoWhD5bok1N5vLjxyMX3dHDLe6IcnvYW7bFhKskw17ePfJu6QNfkpFDCroSz+HjX6SHeCUGzho0IOhFZ5c1dPnw3BKC58gQUPzqZvLalXmrRHWxK7bjM82AVWTVF6shgfQ9yIkhtfbUh2lfZQ2cqTvaREz/jxrcqcbvZW2KKVLZhi/ladlrsPWMbvndlmzFNehblKVKE4luHTj4a3X6td5W9jfmIAMcAXMiDoJgbVWokweYMqC1BQA1QsYpA8ltl4VJKBAKeFkKjBWhsQk4QARsLhW8rdK6qQTFEPAZg60BAYXU2tbu8vH9o1G62+tu9lP5GOB/m05j5RWCwYekVVcwOmI4RHCcQLBdLWwfp2tGNLWVYD1a5/Hw9fwFfV65Ttgu/H2EN9jxlmp0ExX2p2sLkfld0F4fJwwb1TXxPdnCOCulMhqx+SYc1b6kS34Leq56r7mmCizzfFBsVj9bUfFkuJYHhO6dmIvcf/UzO79Q694qZoLqJ1lOoHkyovHaZbz2umqt+QkGFEvxwu3xELzu6eBm/2C8D7S9omEnp3FBy6ldjuwb6EU35/MCOs8fpmiXG/VEdOvIQ/Juny8cHO8zW7qR0aBW3RTP0ZYnlmZrlm3mqtmCtq1/3MD3d0+VxhW1/JuLbTbthEYU/VsC+8X9T/BMAAP//ZYB5aUYEAAA=
+
+  - path: /etc/kubernetes/ssl/etcd-client-key.pem.enc
+    encoding: gzip+base64
+    content: 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
+
+  - path: /etc/kubernetes/ssl/etcd-trusted-ca.pem
+    encoding: gzip+base64
+    content: H4sIAAAAAAAA/2SUy66qSBSG5zxFz01HEOQyOIOCqoJCrlqAMAPcgoByUwt5+s7eJ92ddNfwSyX/Sr5/rT+/n45M4v1hoCMlmBiAoh/KuYQYMjQMcDEqwIgOKqIDCDy9ase6vZka43UQzhhA0LlHxCBLYRyGB8Tq6ZLYHeckWCxXFLpAMoEQIbC4Vi7Gt+wkNCkFX5jxiw/Bx6Xp4tJo765djhn/+c3Chfsbuka0IAoCvfJiHfTUMJ9Ceo+e6fmyukfAYPWTDBG7/CQ7iVe7hOgcaf47LsIA+AYIVfD9wagOBggR0AQPOLwvJ9HX7brvCtYJhR0IFlc6aUPDvrjfqrLFgba9ZINfOuMtFEyDHU1tL+/TryUPt08hnILVnNi5uh3aTW122cvacAo6Dcimnf9JPKjGb8lBAd/wUIL1HJR4ltPrjN/TQaSr71i6MARyZlb39rjr6EYVAVfocXYeO3yQkhGfbeE5NfAUaGebp88DExWrCLBwKdiYKLUV2yL1Z88Y/IuTpg9lm1XcIuJHQ125KF8NO5l9fI2FU71F9td823Ry/7rZ2geufbrfYjs+DguQzp/U5xnuLKdTau6gDhvtDqF3zwNG95bs3QPi56wib5x9evzpC/WpQAybvTRda5qHmyppx7eltM+WEciBEOj9x2WEAv9boRWqOriqSAeuAcbwd3GOPAWhtdVBxABD+nb91xz3T9N+1CGgSvjqB16vgks0GcaKLsXU4tPS3GWFHCSyKdN2hUbSnM76GIk6B1MCkIres1TJF5YNd82asmKeibfWK8lKbdKWNHscb/W13/kq2Wazzb+wJ7+Vy/SQB64TXHcM9uUudqFVvfR3mEXwRWTzhnm6eDZQtrVRvkcp50H4XFDn+K4Bx66oeaJEc8jdt7uz9ABDXM9vsRAETQAkpxF0xkDc50epUMVVO+a3yHScjgXrvHiNNuUrjctPmKcapypDn/Tu8HgBF/HRfqVDd576NZXIg8bKKt9t86TOyLOsuD2N01HobRScklZ+7JrZzzgRqSCMP16ubB6havL4qnrJLpjwXJQ4sqf8MPT76tcv7mf7kQf/fxH+CgAA//9gbVeeLgQAAA==
+
+
+  - path: /etc/kubernetes/ssl/worker.pem
+    encoding: gzip+base64
+    content: H4sIAAAAAAAA/2SUudKySBiFc65icmtKWRQN/qChG2j2HSQTEJpdAWn16qe+L5qq/w3PCZ7gPfX8+3MSUrH9j4z8ECtYBiH6TRkLY2hBWQakqQHFEqgxvn6CDznK8PAAFHpX3ZgyTLbCBh4yJQ9QPUS+Bc4qYCPEyMTCNz5usoAlJW+9EQSOVNuxBKxQ4lb2OkTrlUNUI4VthTW1WsRZIWKd0DompLAZK+z+F3rvpAUPy0cU0iuMPc9AlMxlovdmovDFF0WWhH/J4G2ZP2AmC1g+5/U5SzGta9RY4KDKwVMNcM5DD0nAiwAQsAQp+OkNMGEJeLDvZ+FUenTHzMK+viYvETj4uMjzFBlWnUfD+2Q4LHCzYH1zPlvuy10ahz16GPASsm64jYsf4CDVWkbSqiFxBF+zY4eTZzs7TXEuvmIOPgL5bBL3iPnM3g9lR9/Lge+mfbu6oqg5gxooCX9n7tpsQru1Xs22Vy9m0/hVlRrCnTtRvfk4h3mcgyIEctW5gs82xehfRZN0tNi2u/NyWyYq3Hcx2KcLV1Jp94ape95plZNMQz6FRRu2yF2Hzee6i+E7eN/Y50M7H8DnLoDu0eo2o1ZnafGX20mD801xk2B+GGdttN7neMS34jiwkuDjSk9Kmn7b78kV1KU/Ek/YqLWXO5UhKuHNJTT3miiC2pIAUNsrlO4WEH7eVUKKpD31EKBYmSAIfzaiBRGCEBhSXc+MVCNF8goIWsD/lj5CFgSvmtCnOcZfMy37gvdWqzm2OcfSMvV7c+hfpRp/8kFZmLoWnuYQt1ZzfOSj3xfDkeQQ2FLdPUnXqBd6kIC3KAA4MvAQQLEvNtfXNMbFVH4hYVxWIeOq8QdvO+/cJevIMchIhh/AlQ2zb1zf1ydvU6cMefcKFGM+52hJMEHhi4jRxHRR7XqzPU32mLaiXAXVkHGdNHynkP1gVv002ZotDzEDvOHGa6Np6+OyVk7Wz7qz2Bcmy9ht9kYXASMlp354vBCZplP96eRW+YqfWTn4ja6Mnny+uZcFFenlNOr8DpOr5XwQz9yiV6b2waJuYTwXcMO5LiYVv8oCEXfnaNP2l0hxZqqU92uQvfqn2i2euZVXQYbT2o7M8XNwTyU3pOPGn7avHeTivYjSgCQVNluPquMF3dqa6x5oV2agd8zj09N3DofFzxRwmOFeWfKu//xhfv2CbPi3c/4LAAD//3Pp2keQBAAA
+
+  - path: /etc/kubernetes/ssl/worker-key.pem.enc
+    encoding: gzip+base64
+    content: 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
+
+
+  - path: /etc/kubernetes/ssl/ca.pem
+    encoding: gzip+base64
+    content: H4sIAAAAAAAA/2SUy66qSBSG5zxFz01HEOQyOIOCqoJCrlqAMAPcgoByUwt5+s7eJ92ddNfwSyX/Sr5/rT+/n45M4v1hoCMlmBiAoh/KuYQYMjQMcDEqwIgOKqIDCDy9ase6vZka43UQzhhA0LlHxCBLYRyGB8Tq6ZLYHeckWCxXFLpAMoEQIbC4Vi7Gt+wkNCkFX5jxiw/Bx6Xp4tJo765djhn/+c3Chfsbuka0IAoCvfJiHfTUMJ9Ceo+e6fmyukfAYPWTDBG7/CQ7iVe7hOgcaf47LsIA+AYIVfD9wagOBggR0AQPOLwvJ9HX7brvCtYJhR0IFlc6aUPDvrjfqrLFgba9ZINfOuMtFEyDHU1tL+/TryUPt08hnILVnNi5uh3aTW122cvacAo6Dcimnf9JPKjGb8lBAd/wUIL1HJR4ltPrjN/TQaSr71i6MARyZlb39rjr6EYVAVfocXYeO3yQkhGfbeE5NfAUaGebp88DExWrCLBwKdiYKLUV2yL1Z88Y/IuTpg9lm1XcIuJHQ125KF8NO5l9fI2FU71F9td823Ry/7rZ2geufbrfYjs+DguQzp/U5xnuLKdTau6gDhvtDqF3zwNG95bs3QPi56wib5x9evzpC/WpQAybvTRda5qHmyppx7eltM+WEciBEOj9x2WEAv9boRWqOriqSAeuAcbwd3GOPAWhtdVBxABD+nb91xz3T9N+1CGgSvjqB16vgks0GcaKLsXU4tPS3GWFHCSyKdN2hUbSnM76GIk6B1MCkIres1TJF5YNd82asmKeibfWK8lKbdKWNHscb/W13/kq2Wazzb+wJ7+Vy/SQB64TXHcM9uUudqFVvfR3mEXwRWTzhnm6eDZQtrVRvkcp50H4XFDn+K4Bx66oeaJEc8jdt7uz9ABDXM9vsRAETQAkpxF0xkDc50epUMVVO+a3yHScjgXrvHiNNuUrjctPmKcapypDn/Tu8HgBF/HRfqVDd576NZXIg8bKKt9t86TOyLOsuD2N01HobRScklZ+7JrZzzgRqSCMP16ubB6havL4qnrJLpjwXJQ4sqf8MPT76tcv7mf7kQf/fxH+CgAA//9gbVeeLgQAAA==
+
+
+
+
+  - path: /opt/bin/decrypt-assets
+    owner: root:root
+    permissions: 0700
+    content: |
+      #!/bin/bash -e
+
+      rkt run \
+        --volume=ssl,kind=host,source=/etc/kubernetes/ssl,readOnly=false \
+        --mount=volume=ssl,target=/etc/kubernetes/ssl \
+        --uuid-file-save=/var/run/coreos/decrypt-assets.uuid \
+        --volume=dns,kind=host,source=/etc/resolv.conf,readOnly=true --mount volume=dns,target=/etc/resolv.conf \
+        --net=host \
+        --trust-keys-from-https \
+        quay.io/coreos/awscli:master --exec=/bin/bash -- \
+          -ec \
+          'echo decrypting assets
+           shopt -s nullglob
+           for encKey in /etc/kubernetes/{ssl,}/*.enc; do
+             echo decrypting $encKey
+             f=$(mktemp $encKey.XXXXXXXX)
+             /usr/bin/aws \
+               --region us-west-2 kms decrypt \
+               --ciphertext-blob fileb://$encKey \
+               --output text \
+               --query Plaintext \
+             | base64 -d > $f
+             mv -f $f ${encKey%.enc}
+           done;
+
+           
+           echo done.'
+
+      rkt rm --uuid-file=/var/run/coreos/decrypt-assets.uuid || :
+
+
+
+
+
+  # File needed on every node (used by the kube-proxy DaemonSet), including controllers
+  - path: /etc/kubernetes/kubeconfig/kube-proxy.yaml
+    content: |
+        apiVersion: v1
+        kind: Config
+        clusters:
+        - name: default
+          cluster:
+            certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            server: https://avnast_k8s.inkubator.opsworks.io:443
+        users:
+        - name: default
+          user:
+            tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+        contexts:
+        - context:
+            cluster: default
+            user: default
+          name: default
+        current-context: default
+
+
+  - path: /etc/kubernetes/kubeconfig/worker.yaml
+    content: |
+        apiVersion: v1
+        kind: Config
+        clusters:
+        - name: local
+          cluster:
+            certificate-authority: /etc/kubernetes/ssl/ca.pem
+            server: https://avnast_k8s.inkubator.opsworks.io:443
+        users:
+        - name: kubelet
+          user:
+            client-certificate: /etc/kubernetes/ssl/worker.pem
+            client-key: /etc/kubernetes/ssl/worker-key.pem
+        contexts:
+        - context:
+            cluster: local
+            user: kubelet
+          name: kubelet-context
+        current-context: kubelet-context
+
+
+
+  - path: /etc/kubernetes/cni/net.d/10-flannel.conf
+    content: |
+        {
+            "name": "podnet",
+            "type": "flannel",
+            "delegate": {
+                "isDefaultGateway": true
+            }
+        }
+
+
+
+
+
+
