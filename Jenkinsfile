@@ -1,7 +1,7 @@
 pipeline {
   agent any 
   environment {
-    S3URI=s3://oi-86/k8s
+    S3URI="s3://oi-86/k8s"
   }
   stages {
     stage('kube-aws') {
