@@ -21,7 +21,6 @@ pipeline {
                 PATH="$HOME/bin:$PATH"
             }
             steps {
-              sh 'printenv'
               withKubeConfig(caCertificate: '''-----BEGIN CERTIFICATE-----
 MIIC6DCCAdCgAwIBAgIBADANBgkqhkiG9w0BAQsFADAlMREwDwYDVQQKEwhrdWJl
 LWF3czEQMA4GA1UEAxMHa3ViZS1jYTAeFw0xODAyMTYxMTU5MzlaFw0yODAyMTQx
@@ -41,6 +40,7 @@ m/2X4nApVhsv3b1191AIaTUDLqP35aR4b83z9RaiUGLLlwPzsxNj9razTVcyQaY9
 3E8AQVyNa7+nQ8G0Ff8NW2PrFsbcFUJraKpo5g==
 -----END CERTIFICATE-----
 ''', credentialsId: '9369e911-dc8e-45ce-961e-c18c6e517c3f', serverUrl: 'https://avnast_k8s.inkubator.opsworks.io') {
+                    sh 'printenv'
                     sh 'kubectl apply -f k8s'
                 }
             }
