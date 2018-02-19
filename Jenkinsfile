@@ -55,7 +55,8 @@ pipeline {
     stage ('Store credentials for later use') {
       steps {
         sh 'printenv'
-        archiveArtifacts(artifacts: 'cluster', fingerprint: true)
+        sh 'ls -la'
+        archiveArtifacts(artifacts: 'cluster/*', fingerprint: true)
       }
     }
 /*
