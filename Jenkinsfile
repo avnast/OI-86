@@ -1,18 +1,13 @@
 pipeline {
     agent any 
-    environment {
-      PATH = "/usr/local/bin:$PATH"
-    }
     stages {
         stage('Stage 1') {
             steps {
-                sh 'printenv'
                 sh 'which kubectl'
             }
         }
         stage('Check kubectl') {
             steps {
-              sh 'which kubectl'
               withKubeConfig(caCertificate: '''-----BEGIN CERTIFICATE-----
 MIIC6DCCAdCgAwIBAgIBADANBgkqhkiG9w0BAQsFADAlMREwDwYDVQQKEwhrdWJl
 LWF3czEQMA4GA1UEAxMHa3ViZS1jYTAeFw0xODAyMTYxMTU5MzlaFw0yODAyMTQx
