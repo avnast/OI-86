@@ -46,11 +46,13 @@ pipeline {
 
     stage ('Store credentials for later use') {
       steps {
+        sh 'printenv'
         dir('cluster') {
           echo 'Copying credentials data to $HOME/userContent'
           sh 'tar czf kubeadmin.tar.gz credentials kubeconfig'
           sh 'mv -f kubeadmin.tar.gz $HOME/userContent'
           echo '$JENKINS_URL/userContent/kubeadmin.tar.gz'
+          input message: 'Download http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz and click 'Proceed' (then it will be DELETED)'
           rtp parserName: 'HTML', stableText: 'Download credentials for accessing k8s from <a href="http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz">http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz</a>'
         }
       }
@@ -64,9 +66,17 @@ pipeline {
 */
   }
   post {
+
     success {
       deleteDir()
     }
+
+    failure {
+      dir('cluster') {
+        sh 'kube-aws destroy'
+      }
+    }
+
   }
 }
 
