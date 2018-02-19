@@ -17,11 +17,8 @@ pipeline {
         }
         
         stage('Apply k8s manifests') {
-            environment {
-                PATH="$HOME/bin:$PATH"
-            }
             steps {
-              withEnv(['PATH=$HOME/bin:$PATH']) {
+              withEnv(['PATH=/var/lib/jenkins/bin:/bin:/usr/bin:/sbin:/usr/sbin:/opt/aws/bin']) {
               withKubeConfig(caCertificate: '''-----BEGIN CERTIFICATE-----
 MIIC6DCCAdCgAwIBAgIBADANBgkqhkiG9w0BAQsFADAlMREwDwYDVQQKEwhrdWJl
 LWF3czEQMA4GA1UEAxMHa3ViZS1jYTAeFw0xODAyMTYxMTU5MzlaFw0yODAyMTQx
