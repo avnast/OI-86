@@ -52,7 +52,7 @@ pipeline {
           sh 'tar czf kubeadmin.tar.gz credentials kubeconfig'
           sh 'mv -f kubeadmin.tar.gz $HOME/userContent'
           echo '$JENKINS_URL/userContent/kubeadmin.tar.gz'
-          input(message: 'Download http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz and click 'Proceed' (then it will be DELETED)')
+          input message: 'Download http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz and click "Proceed" (then it will be DELETED)'
           rtp parserName: 'HTML', stableText: 'Download credentials for accessing k8s from <a href="http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz">http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz</a>'
         }
       }
