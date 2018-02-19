@@ -3,7 +3,7 @@ pipeline {
     stages {
         stage('Stage 1') {
             steps {
-                echo 'Hello world!' 
+                echo $PATH
             }
         }
         stage('Check kubectl') {
@@ -27,7 +27,7 @@ m/2X4nApVhsv3b1191AIaTUDLqP35aR4b83z9RaiUGLLlwPzsxNj9razTVcyQaY9
 3E8AQVyNa7+nQ8G0Ff8NW2PrFsbcFUJraKpo5g==
 -----END CERTIFICATE-----
 ''', credentialsId: '9369e911-dc8e-45ce-961e-c18c6e517c3f', serverUrl: 'avnast_k8s.inkubator.opsworks.io') {
-                    sh '/usr/local/bin/kubectl get nodes'
+                    sh 'kubectl get nodes'
                 }
             }
         }
