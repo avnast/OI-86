@@ -1,21 +1,18 @@
 pipeline {
-  agent any 
+  agent any
+
   environment {
+    SETUP_CLUSTER="YES"
+    SETUP_WORDPRESS="YES"
     AWS_ACCESS_KEY_ID=credentials("aws-key-id")
     AWS_SECRET_ACCESS_KEY=credentials("aws-key")
     EC2_REGION="us-west-2"
     S3URI="s3://oi-86/k8s"
+    CLUSTER_URL="https://avnast_k8s.inkubator.opsworks.io"
+    K8S_ADMIN_CERT_CRED="kubeadmin-cert"
   }
+
   stages {
-/*
-    stage('kube-aws render') {
-      steps {
-        dir('cluster') {
-          sh 'kube-aws render credentials --generate-ca'
-          sh 'kube-aws render stack'
-        }
-      }
-    }
 
     stage('kube-aws validate') {
       steps {
@@ -26,48 +23,37 @@ pipeline {
     }
 
     stage('kube-aws up') {
+      when { environment name: 'SETUP_CLUSTER', value: "YES" }
       steps {
         dir('cluster') {
           sh 'kube-aws up --s3-uri $S3URI'
-        }
-      }
-    }
-
-    stage('wait for k8s') {
-      steps {
-        dir('cluster') {
-          retry(60) {
-            sleep 10
-            sh 'kubectl --kubeconfig=kubeconfig get nodes'
+          // wait for k8s up
+          withKubeConfig(credentialsId: $K8S_ADMIN_CERT_CRED_ID, serverUrl: $CLUSTER_URL) {
+            retry(60) {
+              sleep 10
+              sh 'kubectl get nodes'
+            }
           }
         }
       }
     }
-*/
-    stage ('Store credentials for later use') {
-      steps {
-        sh 'printenv'
-        echo 'Copying data to $HOME/userContent'
-        sh 'tar czf cluster.tar.gz cluster'
-        sh 'mv -f cluster.tar.gz $HOME/userContent'
-        input message: 'Download http://$JENKINS_URL/userContent/cluster.tar.gz and click "Proceed" (then it will be DELETED)'
-        sh 'rm -f $HOME/userContent/cluster.tar.gz'
-      }
-    }
 
-    stage('Apply k8s manifests (Wordpress)') {
+    stage('Launch example Wordpress') {
+      when { environment name: 'SETUP_WORDPRESS', value: "YES" }
       steps {
-        sh 'kubectl --kubeconfig=cluster/kubeconfig apply -f k8s'
+        withKubeConfig(credentialsId: $K8S_ADMIN_CERT_CRED_ID, serverUrl: $CLUSTER_URL) {
+          sh 'kubectl apply -f k8s'
+        }
       }
     }
 
   }
-  post {
 
+  post {
     always {
       deleteDir()
     }
-
   }
+
 }
 
