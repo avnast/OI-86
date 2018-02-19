@@ -7,7 +7,7 @@ pipeline {
     S3URI="s3://oi-86/k8s"
   }
   stages {
-
+/*
     stage('kube-aws render') {
       steps {
         dir('cluster') {
@@ -43,38 +43,29 @@ pipeline {
         }
       }
     }
-
+*/
     stage ('Store credentials for later use') {
       steps {
         sh 'printenv'
-        dir('cluster') {
-          echo 'Copying credentials data to $HOME/userContent'
-          sh 'tar czf kubeadmin.tar.gz credentials kubeconfig'
-          sh 'mv -f kubeadmin.tar.gz $HOME/userContent'
-          echo '$JENKINS_URL/userContent/kubeadmin.tar.gz'
-          input message: 'Download http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz and click "Proceed" (then it will be DELETED)'
-          rtp parserName: 'HTML', stableText: 'Download credentials for accessing k8s from <a href="http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz">http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz</a>'
-        }
+        echo 'Copying data to $HOME/userContent'
+        sh 'tar czf cluster.tar.gz cluster'
+        sh 'mv -f cluster.tar.gz $HOME/userContent'
+        input message: 'Download http://$JENKINS_URL/userContent/cluster.tar.gz and click "Proceed" (then it will be DELETED)'
+        sh 'rm -f $HOME/userContent/cluster.tar.gz'
       }
     }
-/*
+
     stage('Apply k8s manifests (Wordpress)') {
       steps {
         sh 'kubectl --kubeconfig=cluster/kubeconfig apply -f k8s'
       }
     }
-*/
+
   }
   post {
 
-    success {
+    always {
       deleteDir()
-    }
-
-    failure {
-      dir('cluster') {
-        sh 'kube-aws destroy'
-      }
     }
 
   }
