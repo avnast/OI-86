@@ -53,13 +53,13 @@ pipeline {
         rtp parserName: 'HTML', stableText: 'Download credentials for accessing k8s from <a href="http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz">http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz</a>'
       }
     }
-
+/*
     stage('Apply k8s manifests (Wordpress)') {
       steps {
-#        sh 'kubectl --kubeconfig=cluster/kubeconfig apply -f k8s'
+        sh 'kubectl --kubeconfig=cluster/kubeconfig apply -f k8s'
       }
     }
-
+*/
   }
   post {
     success {
