@@ -5,7 +5,6 @@ pipeline {
     AWS_SECRET_ACCESS_KEY=credentials("aws-key")
     EC2_REGION="us-west-2"
     S3URI="s3://oi-86/k8s"
-    CREDDIR="/tmp/kube-aws_output"
   }
   stages {
 
@@ -38,28 +37,32 @@ pipeline {
       steps {
         dir('cluster') {
           retry(60) {
-            sleep 10;
-            sh 'kubectl --kubeconfig=kubeconfig get nodes';
+            sleep 10
+            sh 'kubectl --kubeconfig=kubeconfig get nodes'
           }
         }
       }
     }
 
-    stage('Apply k8s manifests') {
+    stage ('Store credentials for later use') {
+      dir('cluster') {
+        echo 'Copying credentials data to $HOME/userContent'
+        sh 'tar czf kubeadmin.tar.gz credentials kubeconfig'
+        sh 'mv -f kubeadmin.tar.gz $HOME/userContent'
+        echo '$JENKINS_URL/userContent/kubeadmin.tar.gz'
+        rtp parserName: 'HTML', stableText: 'Download credentials for accessing k8s from <a href="http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz">http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz</a>'
+      }
+    }
+
+    stage('Apply k8s manifests (Wordpress)') {
       steps {
-        sh 'kubectl --kubeconfig=cluster/kubeconfig apply -f k8s'
+#        sh 'kubectl --kubeconfig=cluster/kubeconfig apply -f k8s'
       }
     }
 
   }
   post {
     success {
-      dir('cluster') {
-        echo 'Copying credentials to $CREDDIR'
-        sh 'mkdir -p $CREDDIR && cp -a credentials kubeconfig $CREDDIR'
-      }
-    }
-    always {
       deleteDir()
     }
   }
