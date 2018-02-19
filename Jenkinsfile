@@ -45,12 +45,14 @@ pipeline {
     }
 
     stage ('Store credentials for later use') {
-      dir('cluster') {
-        echo 'Copying credentials data to $HOME/userContent'
-        sh 'tar czf kubeadmin.tar.gz credentials kubeconfig'
-        sh 'mv -f kubeadmin.tar.gz $HOME/userContent'
-        echo '$JENKINS_URL/userContent/kubeadmin.tar.gz'
-        rtp parserName: 'HTML', stableText: 'Download credentials for accessing k8s from <a href="http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz">http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz</a>'
+      steps {
+        dir('cluster') {
+          echo 'Copying credentials data to $HOME/userContent'
+          sh 'tar czf kubeadmin.tar.gz credentials kubeconfig'
+          sh 'mv -f kubeadmin.tar.gz $HOME/userContent'
+          echo '$JENKINS_URL/userContent/kubeadmin.tar.gz'
+          rtp parserName: 'HTML', stableText: 'Download credentials for accessing k8s from <a href="http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz">http://${ENV:JENKINS_URL}/userContent/kubeadmin.tar.gz</a>'
+        }
       }
     }
 /*
