@@ -55,8 +55,8 @@ pipeline {
     stage ('Store credentials for later use') {
       steps {
         sh 'printenv'
-        archiveArtifacts: cluster
-       }
+        archiveArtifacts(artifacts: 'cluster', fingerprint: true)
+      }
     }
 /*
     stage('Apply k8s manifests (Wordpress)') {
