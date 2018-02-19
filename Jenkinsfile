@@ -54,7 +54,7 @@ pipeline {
 */
     stage ('Store credentials for later use') {
       steps {
-        sh 'zip cluster.zip cluster'
+        sh 'zip -r cluster.zip cluster'
         sh 'ls -la'
         archiveArtifacts(artifacts: 'cluster.zip', fingerprint: true)
       }
