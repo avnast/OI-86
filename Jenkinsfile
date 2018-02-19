@@ -3,7 +3,7 @@ pipeline {
     stages {
         stage('install kube-aws') {
             steps {
-                sh 'wget https://github.com/kubernetes-incubator/kube-aws/releases/download/v0.9.9/kube-aws-linux-amd64.tar.gz'
+                sh 'wget -q https://github.com/kubernetes-incubator/kube-aws/releases/download/v0.9.9/kube-aws-linux-amd64.tar.gz'
                 sh 'tar xzf kube-aws-linux-amd64.tar.gz'
                 sh 'mkdir -p ~/bin && mv linux-amd64/kube-aws ~/bin && chmod +x ~/bin/kube-aws'
                 sh 'rm -rf linux-amd64 kube-aws-linux-amd64.tar.gz'
@@ -11,13 +11,14 @@ pipeline {
         }
         stage('install kubectl') {
             steps {
-                sh 'curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl'
+                sh 'curl -s -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl'
                 sh 'mkdir -p ~/bin && mv kubectl ~/bin && chmod +x ~/bin/kubectl'
             }
         }
         
         stage('Apply k8s manifests') {
             steps {
+              sh 'printenv'
               withKubeConfig(caCertificate: '''-----BEGIN CERTIFICATE-----
 MIIC6DCCAdCgAwIBAgIBADANBgkqhkiG9w0BAQsFADAlMREwDwYDVQQKEwhrdWJl
 LWF3czEQMA4GA1UEAxMHa3ViZS1jYTAeFw0xODAyMTYxMTU5MzlaFw0yODAyMTQx
