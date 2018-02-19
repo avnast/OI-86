@@ -26,7 +26,7 @@ m/2X4nApVhsv3b1191AIaTUDLqP35aR4b83z9RaiUGLLlwPzsxNj9razTVcyQaY9
 87poWoMpnuAME0U5zTplXrozY4InTV7z6mJGS8sENHHVkSqrR1oJEPSWk6n2jsOZ
 3E8AQVyNa7+nQ8G0Ff8NW2PrFsbcFUJraKpo5g==
 -----END CERTIFICATE-----
-''', credentialsId: '9369e911-dc8e-45ce-961e-c18c6e517c3f', serverUrl: 'avnast_k8s.inkubator.opsworks.io') {
+''', credentialsId: '9369e911-dc8e-45ce-961e-c18c6e517c3f', serverUrl: 'https://avnast_k8s.inkubator.opsworks.io') {
                     sh 'kubectl get nodes'
                 }
             }
