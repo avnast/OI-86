@@ -5,14 +5,14 @@ pipeline {
             steps {
                 sh 'wget https://github.com/kubernetes-incubator/kube-aws/releases/download/v0.9.9/kube-aws-linux-amd64.tar.gz'
                 sh 'tar xzf kube-aws-linux-amd64.tar.gz'
-                sh 'mv linux-amd64/kube-aws ~/bin && chmod +x ~/bin/kube-aws'
+                sh 'mkdir -p ~/bin && mv linux-amd64/kube-aws ~/bin && chmod +x ~/bin/kube-aws'
                 sh 'rm -rf linux-amd64 kube-aws-linux-amd64.tar.gz'
             }
         }
         stage('install kubectl') {
             steps {
                 sh 'curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl'
-                sh 'mv kubectl ~/bin && chmod +x ~/bin/kubectl'
+                sh 'mkdir -p ~/bin && mv kubectl ~/bin && chmod +x ~/bin/kubectl'
             }
         }
         
