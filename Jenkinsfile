@@ -1,8 +1,8 @@
 pipeline {
   agent any 
   environment {
-    AWS_ACCESS_KEY_ID=credentials("AWS_ACCESS_KEY_ID")
-    AWS_ACCESS_KEY=credentials("AWS_ACCESS_KEY")
+    AWS_ACCESS_KEY_ID=credentials("aws-key-id")
+    AWS_ACCESS_KEY=credentials("aws-key")
     EC2_REGION="us-west-2"
     S3URI="s3://oi-86/k8s"
     CREDDIR="/tmp/kube-aws_output"
