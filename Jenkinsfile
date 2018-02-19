@@ -2,12 +2,13 @@ pipeline {
   agent any 
   environment {
     S3URI="s3://oi-86/k8s"
+    CREDDIR="/tmp/kube-aws_output"
   }
   stages {
 
     stage('kube-aws') {
       steps {
-        sh 'cd cluster'
+        dir('cluster')
         sh 'kube-aws render credentials --generate-ca'
         sh 'kube-aws render stack'
         sh 'kube-aws validate --s3-uri $S3URI'
@@ -17,6 +18,7 @@ pipeline {
 
     stage('wait for k8s') {
       steps {
+        dir('cluster')
         retry(60) {
           sleep 10;
           sh 'kubectl --kubeconfig=kubeconfig get nodes';
@@ -26,10 +28,21 @@ pipeline {
 
     stage('Apply k8s manifests') {
       steps {
+        dir('cluster')
         sh 'kubectl --kubeconfig=kubeconfig apply -f ../k8s'
       }
     }
 
+  }
+  post {
+    success {
+      dir('cluster')
+      echo 'Copying credentials to $CREDDIR'
+      sh 'mkdir -p $CREDDIR && cp -a credentials kubeconfig $CREDDIR'
+    }
+    always {
+      deleteDir()
+    }
   }
 }
 
