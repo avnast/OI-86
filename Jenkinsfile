@@ -9,12 +9,26 @@ pipeline {
   }
   stages {
 
-    stage('kube-aws') {
+    stage('kube-aws render') {
       steps {
         dir('cluster') {
           sh 'kube-aws render credentials --generate-ca'
           sh 'kube-aws render stack'
+        }
+      }
+    }
+
+    stage('kube-aws validate') {
+      steps {
+        dir('cluster') {
           sh 'kube-aws validate --s3-uri $S3URI'
+        }
+      }
+    }
+
+    stage('kube-aws up') {
+      steps {
+        dir('cluster') {
           sh 'kube-aws up --s3-uri $S3URI'
         }
       }
