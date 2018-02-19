@@ -18,7 +18,7 @@ pipeline {
         
         stage('Apply k8s manifests') {
             environment {
-                PATH=$HOME/bin:$PATH
+                PATH="$HOME/bin:$PATH"
             }
             steps {
               sh 'printenv'
