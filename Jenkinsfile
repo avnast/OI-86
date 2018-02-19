@@ -4,6 +4,7 @@ pipeline {
     S3URI="s3://oi-86/k8s"
   }
   stages {
+
     stage('kube-aws') {
       steps {
         sh 'cd cluster'
@@ -24,8 +25,11 @@ pipeline {
     }
 
     stage('Apply k8s manifests') {
-      sh 'kubectl --kubeconfig=kubeconfig apply -f ../k8s'
+      steps {
+        sh 'kubectl --kubeconfig=kubeconfig apply -f ../k8s'
+      }
     }
+
   }
 }
 
