@@ -17,8 +17,10 @@ pipeline {
         }
         
         stage('Apply k8s manifests') {
+            environment {
+                PATH=$HOME/bin:$PATH
+            }
             steps {
-              sh 'export PATH=$HOME/bin:$PATH'
               sh 'printenv'
               withKubeConfig(caCertificate: '''-----BEGIN CERTIFICATE-----
 MIIC6DCCAdCgAwIBAgIBADANBgkqhkiG9w0BAQsFADAlMREwDwYDVQQKEwhrdWJl
