@@ -80,5 +80,11 @@ pipeline {
 
   }
 
+  post {
+    always {
+      sh 'rm -f manifests.zip $CLUSTER_NAME.zip'
+    }
+  }
+
 }
 
