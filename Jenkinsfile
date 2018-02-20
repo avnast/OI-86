@@ -64,7 +64,7 @@ pipeline {
     }
 
     stage ('Archive cluster configs') {
-      // when { environment name: "SETUP_CLUSTER", value: "YES" }
+      when { environment name: "SETUP_CLUSTER", value: "YES" }
       steps {
         zip archive: true, dir: 'cluster', zipFile: CLUSTER_NAME+'.zip'
       }
@@ -74,7 +74,7 @@ pipeline {
       when { environment name: "SETUP_WORDPRESS", value: "YES" }
       steps {
         zip archive: true, dir: 'manifests', zipFile: 'manifests.zip'
-        sh 'kubectl --kubeconfig=cluster/kubeconfig apply -f manifests'
+        sh 'kubectl --kubeconfig=cluster/kubeconfig create -f manifests'
       }
     }
 
