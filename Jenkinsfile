@@ -66,14 +66,14 @@ pipeline {
     stage ('Archive cluster configs') {
       when { environment name: "SETUP_CLUSTER", value: "YES" }
       steps {
-        zip zipFile:'$CLUSTER_NAME.zip' dir:'cluster' archive:true
+        zip(zipFile:'$CLUSTER_NAME.zip', dir:'cluster', archive:true)
       }
     }
 
     stage('Apply k8s manifests (Wordpress)') {
       when { environment name: "SETUP_WORDPRESS", value: "YES" }
       steps {
-        zip zipFile:'manifests.zip' dir:'manifests' archive:true
+        zip(zipFile:'manifests.zip', dir:'manifests', archive:true)
         sh 'kubectl --kubeconfig=cluster/kubeconfig apply -f manifests'
       }
     }
