@@ -2,7 +2,7 @@ pipeline {
   agent any 
   environment {
     SETUP_CLUSTER="YES"
-    SETUP_WORDPRESS="YES"
+    SETUP_WORDPRESS="NO"
     AWS_ACCESS_KEY_ID=credentials("aws-key-id")
     AWS_SECRET_ACCESS_KEY=credentials("aws-key")
     AWS_DEFAULT_REGION="us-west-2"
@@ -21,7 +21,8 @@ pipeline {
   stages {
 
     stage('kube-aws init') {
-      when { environment name: "SETUP_CLUSTER", value: "YES" }
+      when { environment name: "SETUP_CLUSTER", value: "YES"; not expression fileExists: cluster/cluster.yaml }
+      sh 'mkdir -p cluster'
       steps {
         dir('cluster') {
           sh 'kube-aws init --cluster-name=$CLUSTER_NAME --external-dns-name=$CLUSTER_DNS --hosted-zone-id=$HOSTED_ZONE_ID --region=$AWS_DEFAULT_REGION --key-name=$KEY_PAIR --availability-zone=$AWS_AVAILABILITY_ZONE --kms-key-arn=$KMS_KEY_ARN'
@@ -65,27 +66,19 @@ pipeline {
     stage ('Archive cluster configs') {
       when { environment name: "SETUP_CLUSTER", value: "YES" }
       steps {
-        sh 'zip -r cluster.zip cluster'
-        sh 'ls -la'
-        archiveArtifacts(artifacts: 'cluster.zip', fingerprint: true)
+        zip zipFile:$CLUSTER_NAME.zip dir:cluster archive:true
       }
     }
 
     stage('Apply k8s manifests (Wordpress)') {
       when { environment name: "SETUP_WORDPRESS", value: "YES" }
       steps {
-        sh 'kubectl --kubeconfig=cluster/kubeconfig apply -f k8s'
+        zip zipFile:manifests.zip dir:manifests archive:true
+        sh 'kubectl --kubeconfig=cluster/kubeconfig apply -f manifests'
       }
     }
 
   }
-  post {
 
-    always {
-      sh 'printenv'
-      deleteDir()
-    }
-
-  }
 }
 
