@@ -73,7 +73,7 @@ pipeline {
     stage('Apply k8s manifests (Wordpress)') {
       when { environment name: "SETUP_WORDPRESS", value: "YES" }
       steps {
-        zip zipFile:'manifests.zip', dir:'manifests', archive:true
+        zip archive: true, dir: 'manifests', zipFile: 'manifests.zip'
         sh 'kubectl --kubeconfig=cluster/kubeconfig apply -f manifests'
       }
     }
