@@ -3,6 +3,7 @@ pipeline {
   environment {
     SETUP_CLUSTER="NO"
     SETUP_WORDPRESS="YES"
+    WORDPRESS_MYSQL_ROOT_PASS=credentials("wp-mysql-root-pass")
     AWS_ACCESS_KEY_ID=credentials("aws-key-id")
     AWS_SECRET_ACCESS_KEY=credentials("aws-key")
     AWS_DEFAULT_REGION="us-west-2"
@@ -74,6 +75,7 @@ pipeline {
       when { environment name: "SETUP_WORDPRESS", value: "YES" }
       steps {
         zip archive: true, dir: 'manifests', zipFile: 'manifests.zip'
+        sh 'kubectl create secret generic mysql-pass --from-literal=password=$WORDPRESS_MYSQL_ROOT_PASS'
         sh 'kubectl --kubeconfig=cluster/kubeconfig create -f manifests'
       }
     }
