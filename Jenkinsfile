@@ -66,7 +66,7 @@ pipeline {
     stage ('Archive cluster configs') {
       // when { environment name: "SETUP_CLUSTER", value: "YES" }
       steps {
-        zip archive: true, dir: 'cluster', zipFile: $CLUSTER_NAME.zip
+        zip archive: true, dir: 'cluster', zipFile: CLUSTER_NAME+'.zip'
       }
     }
 
