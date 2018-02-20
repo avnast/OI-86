@@ -75,7 +75,7 @@ pipeline {
       when { environment name: "SETUP_WORDPRESS", value: "YES" }
       steps {
         zip archive: true, dir: 'manifests', zipFile: 'manifests.zip'
-        sh 'kubectl create secret generic mysql-pass --from-literal=password=$WORDPRESS_MYSQL_ROOT_PASS'
+        sh 'kubectl create secret generic mysql-pass --from-literal=password="$WORDPRESS_MYSQL_ROOT_PASS"'
         sh 'kubectl --kubeconfig=cluster/kubeconfig create -f manifests'
       }
     }
