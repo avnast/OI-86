@@ -21,7 +21,7 @@ pipeline {
   stages {
 
     stage('kube-aws init') {
-      when { environment name: "SETUP_CLUSTER", value: "YES"; not expression fileExists('cluster/cluster.yaml') }
+      when { environment name: "SETUP_CLUSTER", value: "YES"; expression { ! fileExists('cluster/cluster.yaml') } }
       sh 'mkdir -p cluster'
       steps {
         dir('cluster') {
