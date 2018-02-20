@@ -2,6 +2,10 @@
 
 Requirements:
   - Jenkins server with installed git, kube-aws and kubectl
+  - Jenkins plugins used:
+    - Pipeline: Basic Steps
+    - Pipeline: Nodes and Processes
+    - Pipeline Utility Steps
 
 Usage:
   - review Jenkinsfile and adjust environment variables as needed
