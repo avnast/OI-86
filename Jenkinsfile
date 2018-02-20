@@ -22,8 +22,8 @@ pipeline {
 
     stage('kube-aws init') {
       when { environment name: "SETUP_CLUSTER", value: "YES"; expression { ! fileExists('cluster/cluster.yaml') } }
-      sh 'mkdir -p cluster'
       steps {
+        sh 'mkdir -p cluster'
         dir('cluster') {
           sh 'kube-aws init --cluster-name=$CLUSTER_NAME --external-dns-name=$CLUSTER_DNS --hosted-zone-id=$HOSTED_ZONE_ID --region=$AWS_DEFAULT_REGION --key-name=$KEY_PAIR --availability-zone=$AWS_AVAILABILITY_ZONE --kms-key-arn=$KMS_KEY_ARN'
         }
@@ -66,7 +66,7 @@ pipeline {
     stage ('Archive cluster configs') {
       when { environment name: "SETUP_CLUSTER", value: "YES" }
       steps {
-        zip zipFile:'$CLUSTER_NAME.zip', dir:'cluster', archive:true
+        zip archive: true, dir: 'cluster', zipFile: '$CLUSTER_NAME.zip'
       }
     }
 
