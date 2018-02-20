@@ -2,7 +2,7 @@ pipeline {
   agent any 
   environment {
     SETUP_CLUSTER="NO"
-    SETUP_WORDPRESS="YES"
+    SETUP_WORDPRESS="NO"
     WORDPRESS_MYSQL_ROOT_PASS=credentials("wp-mysql-root-pass")
     AWS_ACCESS_KEY_ID=credentials("aws-key-id")
     AWS_SECRET_ACCESS_KEY=credentials("aws-key")
