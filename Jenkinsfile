@@ -1,8 +1,8 @@
 pipeline {
   agent any 
   environment {
-    SETUP_CLUSTER="YES"
-    SETUP_WORDPRESS="NO"
+    SETUP_CLUSTER="NO"
+    SETUP_WORDPRESS="YES"
     AWS_ACCESS_KEY_ID=credentials("aws-key-id")
     AWS_SECRET_ACCESS_KEY=credentials("aws-key")
     AWS_DEFAULT_REGION="us-west-2"
@@ -64,9 +64,9 @@ pipeline {
     }
 
     stage ('Archive cluster configs') {
-      when { environment name: "SETUP_CLUSTER", value: "YES" }
+      // when { environment name: "SETUP_CLUSTER", value: "YES" }
       steps {
-        zip archive: true, dir: 'cluster', zipFile: '$CLUSTER_NAME.zip'
+        zip archive: true, dir: 'cluster', zipFile: $CLUSTER_NAME.zip
       }
     }
 
